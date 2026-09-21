@@ -100,8 +100,10 @@ button{font-family:inherit}
 .finish .alguemMsg{font-family:Georgia,serif;color:#ddd3cf;font-size:clamp(16px,2.6vw,23px);line-height:1.55;max-width:680px}
 .finish .alguemMsg span{color:#c40000}
 #finalPulse{position:fixed;inset:0;background:rgba(120,0,0,.0);pointer-events:none;z-index:60;opacity:0}
-#finalPulse.active{animation:finalHeart 1.2s ease-in-out infinite}
+#finalPulse.active{animation:finalHeart .78s ease-in-out infinite}
 @keyframes finalHeart{0%,100%{opacity:0}45%{opacity:.07}50%{opacity:.18}56%{opacity:.07}62%{opacity:.13}70%{opacity:0}}
+#exitBtn.pulsing{animation:buttonHeart .78s ease-in-out infinite;box-shadow:0 0 22px rgba(150,0,0,.18)}
+@keyframes buttonHeart{0%,100%{transform:scale(1);opacity:.72}45%{transform:scale(1.02);opacity:.88}50%{transform:scale(1.055);opacity:1;box-shadow:0 0 30px rgba(170,0,0,.35)}56%{transform:scale(1.018);opacity:.86}62%{transform:scale(1.04);opacity:.94}70%{transform:scale(1);opacity:.72}}
 #exitBtn{background:rgba(80,80,80,.16);border:1px solid rgba(190,185,181,.2);color:rgba(225,218,214,.72);padding:9px 20px;border-radius:999px;font-family:Georgia,serif;font-size:10px;letter-spacing:.28em;cursor:pointer;transition:.2s}
 #exitBtn:hover{background:rgba(120,120,120,.22)}
 .finish #exitBtn{margin-top:12px}
@@ -169,7 +171,7 @@ button{font-family:inherit}
 </section>
 <div id="finalPulse"></div>
 
-<div class="musicLabel">ANSIEDADE · HEXATOMBE</div>
+<div id="musicLabel" class="musicLabel">ANSIEDADE · HEXATOMBE</div>
 
 <script>
 const introLines = [
@@ -342,25 +344,104 @@ $("nameInput").addEventListener("keydown", e => {
 
 renderQuestion();
 
+let finalAudioCtx = null;
+let heartbeatTimer = null;
+let breathTimer = null;
+
+function stopQuestionnaireMusic(){
+  const player = $("player");
+  try {
+    player.src = "about:blank";
+    player.removeAttribute("src");
+  } catch(e) {}
+}
+
+function thump(ctx, when, frequency, volume, duration){
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(frequency, when);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(38, frequency * .72), when + duration);
+  gain.gain.setValueAtTime(.0001, when);
+  gain.gain.exponentialRampToValueAtTime(volume, when + .018);
+  gain.gain.exponentialRampToValueAtTime(.0001, when + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(when);
+  osc.stop(when + duration + .01);
+}
+
+function breath(ctx, when, inhale=true){
+  const duration = inhale ? 1.05 : .85;
+  const bufferSize = Math.floor(ctx.sampleRate * duration);
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for(let i=0;i<bufferSize;i++){
+    const t=i/bufferSize;
+    const envelope= Math.sin(Math.PI*t) * (inhale ? .045 : .032);
+    data[i]=(Math.random()*2-1)*envelope;
+  }
+  const source=ctx.createBufferSource();
+  const filter=ctx.createBiquadFilter();
+  const gain=ctx.createGain();
+  filter.type="bandpass";
+  filter.frequency.value=850;
+  filter.Q.value=.65;
+  gain.gain.value=1;
+  source.buffer=buffer;
+  source.connect(filter).connect(gain).connect(ctx.destination);
+  source.start(when);
+}
+
 function heartbeatAndBreath(){
   try{
-    const C=window.AudioContext||window.webkitAudioContext; if(!C) return;
-    const ctx=new C(); const now=ctx.currentTime;
-    for(let i=0;i<3;i++){
-      const t=now+i*.72;
-      [0,.11].forEach((off,j)=>{
-        const o=ctx.createOscillator(),g=ctx.createGain(); o.type="sine"; o.frequency.value=j?62:78; g.gain.setValueAtTime(.0001,t+off); g.gain.exponentialRampToValueAtTime(.16,t+off+.025); g.gain.exponentialRampToValueAtTime(.0001,t+off+.16); o.connect(g).connect(ctx.destination); o.start(t+off); o.stop(t+off+.18);
-      });
-    }
-    const o=ctx.createOscillator(),g=ctx.createGain(); o.type="sine"; o.frequency.value=170; g.gain.setValueAtTime(.0001,now); g.gain.linearRampToValueAtTime(.035,now+.2); g.gain.linearRampToValueAtTime(.0001,now+.8); o.connect(g).connect(ctx.destination); o.start(now); o.stop(now+.9);
+    const C=window.AudioContext||window.webkitAudioContext;
+    if(!C) return;
+    if(finalAudioCtx) finalAudioCtx.close().catch(()=>{});
+    finalAudioCtx=new C();
+    const ctx=finalAudioCtx;
+    if(ctx.state === "suspended") ctx.resume();
+
+    // Batimento acelerado: dois impactos curtos a cada ~0,78 s.
+    const beat=()=>{
+      if(!finalAudioCtx || finalAudioCtx.state === "closed") return;
+      const t=ctx.currentTime+.03;
+      thump(ctx,t,74,.22,.13);
+      thump(ctx,t+.105,58,.17,.15);
+    };
+    beat();
+    heartbeatTimer=setInterval(beat,780);
+
+    // Respiração curta e acelerada, contínua no fundo.
+    let inhale=true;
+    const breathe=()=>{
+      if(!finalAudioCtx || finalAudioCtx.state === "closed") return;
+      breath(ctx,ctx.currentTime+.02,inhale);
+      inhale=!inhale;
+    };
+    breathe();
+    breathTimer=setInterval(breathe,1100);
   }catch(e){}
 }
+
+function stopFinalAudio(){
+  if(heartbeatTimer){ clearInterval(heartbeatTimer); heartbeatTimer=null; }
+  if(breathTimer){ clearInterval(breathTimer); breathTimer=null; }
+  if(finalAudioCtx){ finalAudioCtx.close().catch(()=>{}); finalAudioCtx=null; }
+}
+
 $("exitBtn").addEventListener("click",()=>{
+  stopFinalAudio();
   try{window.close();}catch(e){}
   document.body.innerHTML='<div style="height:100vh;background:#000;color:#8f7774;display:flex;align-items:center;justify-content:center;font-family:Georgia,serif;letter-spacing:.18em;font-size:12px;text-align:center;padding:30px">FIM.</div>';
 });
-const oldShow=show;
-function finishWithEffects(){ heartbeatAndBreath(); $("finalPulse").classList.add("active"); }
+
+function finishWithEffects(){
+  stopQuestionnaireMusic();
+  $("musicLabel").style.display="none";
+  $("exitBtn").classList.add("pulsing");
+  $("finalPulse").classList.add("active");
+  heartbeatAndBreath();
+}
 </script>
 </body>
 </html>
